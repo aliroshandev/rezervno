@@ -16,8 +16,13 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-# امنیت: حذف ابزارهای غیرضروری + به‌روزرسانی پکیج‌های امنیتی
-RUN apk --no-cache upgrade && apk add --no-cache dumb-init
+# ── (بدون `apk upgrade` / dumb-init) ──
+# `apk` به CDNِ آلپاین (dl-cdn.alpinelinux.org) وابسته است که در شبکه‌ی سرور
+# در دسترس نیست (TLS error → exit 99) و build را می‌شکند. dumb-init هم ضروری
+# نیست: docker-entrypoint.sh با `exec npm run start` تمام می‌شود، پس node
+# خودش PID1 می‌شود و سیگنال‌ها را می‌گیرد. حذفِ apk وابستگی به این CDN را
+# کاملاً برمی‌دارد. addgroup/adduser از busyboxِ داخلیِ آلپاین است و به apk
+# نیاز ندارد.
 
 # امنیت: ساخت کاربر non-root اختصاصی (اجرا با root خطرناک است)
 RUN addgroup -g 1001 -S nodejs && adduser -u 1001 -S nextjs -G nodejs
@@ -49,6 +54,4 @@ RUN chmod +x /docker-entrypoint.sh
 USER nextjs
 
 EXPOSE 3000
-# dumb-init: مدیریت صحیح سیگنال‌ها و جلوگیری از zombie process
-ENTRYPOINT ["dumb-init", "--"]
 CMD ["/docker-entrypoint.sh"]
