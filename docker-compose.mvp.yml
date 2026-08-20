@@ -2,7 +2,13 @@
 #  رزرونو MVP — override سرور (فقط پنل کسب‌وکار)
 #
 #  استفاده (روی سرور، همه‌چیز در داکر):
-#    docker compose -f docker-compose.yml -f docker-compose.mvp.yml up -d --build
+#    docker compose -f docker-compose.yml -f docker-compose.mvp.yml \
+#      --profile http up -d --build
+#  (nginx در compose پایه با پروفایلِ «http» است و override آن را غیرفعال نمی‌کند؛
+#   پس برای بالا آمدن نرم‌افزارِ سرو، حتماً --profile http لازم است.)
+#
+#  profileهای «backup» و «cron» عمداً فعال نیستند — برای MVP فقط
+#  nginx + api + postgres + redis بالا می‌آید.
 #
 #  این override سه کار می‌کند:
 #    1. nginx فقط پنلِ کسب‌وکار را در ریشه سرو می‌کند (nginx.mvp.conf) و
@@ -21,7 +27,10 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
-    profiles: []          # override پروفایلِ «http» — در MVP همیشه بالا
+    # در compose پایه nginx با پروفایلِ «http» است؛ override همان را فعال می‌کند.
+    # (کامپوز، لیست profile را ادغام می‌کند و `[]` آن را خالی نمی‌کند — از این رو
+    #  «--profile http» در دستورِ بالا الزامی است.)
+    profiles: ["http"]
     ports:
       - "80:80"
       # برای HTTPS بعد از تنظیم SSL: - "443:443"
@@ -33,8 +42,17 @@ services:
     environment:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?ALLOWED_ORIGINS را در .env تنظیم کن (مثلاً https://business.rezervno.ir)}
 
-  # بکاپ و cron از compose پایه ارث می‌برند؛ برای MVP نگه داشته می‌شوند.
+  # ── بکاپ و cron از compose پایه ارث می‌برند ولی برای MVP در پروفایلِ غیرفعال
+  #    قرار می‌گیرند تا با `up` پیش‌فرض **بیلد **نشوند. چرا: هر دو از
+  #    `apk add` روی CDNِ آلپاین (dl-cdn.alpinelinux.org) وابسته‌اند که در شبکه‌ی
+  #    سرور در دسترس نیست (TLS error → build شکست → `up` کل پروژه را متوقف می‌کند).
+  #    برای MVP فقط nginx + api + postgres + redis لازم است.
+  #    فعال‌سازیِ مجدد (وقتی شبکه/S3 در دسترس بود):
+  #      docker compose -f docker-compose.yml -f docker-compose.mvp.yml \
+  #        --profile backup --profile cron up -d --build
   backup:
     restart: unless-stopped
+    profiles: ["backup"]
   cron:
     restart: unless-stopped
+    profiles: ["cron"]
