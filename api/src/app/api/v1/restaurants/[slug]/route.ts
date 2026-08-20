@@ -28,19 +28,29 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
           latitude: true, longitude: true, openingHours: true, timezone: true,
           menuItems: {
             where: { isActive: true }, orderBy: { soldCount: 'desc' },
-            select: { name: true, emoji: true, priceToman: true },
+            select: { name: true, emoji: true, priceToman: true, category: true },
           },
           // فقط عکسِ تأییدشده. این تنها مسیری است که گالری را به بیرون
           // می‌دهد — هم اپ مشتری و هم صفحه‌ی سئوی /r/[slug] از همین می‌خوانند
           // — پس همین یک فیلتر، مرزِ «منتشرشده» است.
+          // لوگو («category=logo») عمداً از این آرایه بیرون است — قاطیِ
+          // گالریِ غذا/فضا/نوشیدنی نمی‌شود، جدا زیرِ logo_url برمی‌گردد.
           photos: {
-            where: { status: PUBLIC_STATUS },
+            where: { status: PUBLIC_STATUS, category: { not: 'logo' } },
             orderBy: { sortOrder: 'asc' },
             select: { url: true, caption: true, category: true },
           },
         },
       });
       if (!r) return null;
+
+      // آخرین عکسِ لوگویِ تأییدشده — اگر رستوران هنوز لوگویی آپلود/تأیید
+      // نکرده، null است (فرانت به همان نمای پیش‌فرضِ ایموجی/گرادیان برمی‌گردد).
+      const logo = await db.restaurantPhoto.findFirst({
+        where: { restaurantId: r.id, category: 'logo', status: PUBLIC_STATUS },
+        orderBy: { createdAt: 'desc' },
+        select: { url: true },
+      });
 
       // امتیازِ تجمیعی از نظرهای منتشرشده (schema.org AggregateRating).
       const agg = await db.review.aggregate({
@@ -51,6 +61,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
       return {
         id: r.id, slug: r.slug, name: r.name, cuisine: r.cuisine,
         vibes: r.vibes, price_band: r.priceBand,
+        logo_url: logo?.url ?? null,
         location: {
           address: r.address, city: r.city, district: r.district,
           postal_code: r.postalCode, country: r.country,
@@ -59,7 +70,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
         opening_hours: r.openingHours, timezone: r.timezone,
         rating: agg._avg.rating ? Math.round(agg._avg.rating * 10) / 10 : null,
         reviews_count: agg._count,
-        menu: r.menuItems.map((m) => ({ name: m.name, emoji: m.emoji, price_toman: m.priceToman })),
+        menu: r.menuItems.map((m) => ({ name: m.name, emoji: m.emoji, price_toman: m.priceToman, category: m.category })),
         photos: r.photos.map((p) => ({ url: p.url, caption: p.caption, category: p.category })),
       };
     });

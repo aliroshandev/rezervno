@@ -46,20 +46,26 @@ function openStatusMenu(i){
     <div class="status-opts">${opts}</div>
     <button class="btn btn-ghost btn-block" style="margin-top:12px" onclick="viewHistory(${i})">${icon('inbox',{size:14})} تاریخچه‌ی تغییرات</button>`);
 }
-async function changeStatus(i,to){
+// ⚠️ گسترش‌یافته (Tonight Board، ۲۰۲۶-۰۸-۱۴): پارامترِ reason اضافه شد تا
+// «لغو» بتواند دلیل را هم در همین مسیرِ واحدِ optimistic-update+rollback
+// به بک‌اند بفرستد (به‌جایِ اینکه cancelRes/doCancelRes مسیرِ جدا و
+// ناقصِ خودشان را داشته باشند — رجوع کن به یافته‌ی reservations.js).
+async function changeStatus(i,to,reason){
   const r=RES[i]; if(!r)return;
   closeModal();
   // به‌روزرسانی خوش‌بینانه‌ی UI
-  const old=r.status; r.status=to;
+  const old=r.status, oldReason=r.cancelReason; r.status=to;
+  if(reason) r.cancelReason=reason;
   // ثبت محلی در تاریخچه (برای نمایش در حالت دمو)
   r._events=r._events||[{toStatus:old,actor:'system',createdAt:new Date(Date.now()-3600000).toISOString(),isAutomatic:false}];
-  r._events.push({toStatus:to,actor:'staff',createdAt:new Date().toISOString(),isAutomatic:false});
+  r._events.push({toStatus:to,actor:'staff',createdAt:new Date().toISOString(),isAutomatic:false,reason});
   renderResList();
   toast('',`وضعیت به «${STATUS_META[to]?.label||to}» تغییر کرد`);
   // ارسال به بک‌اند؛ فقط اگر سرور آنلاین بود و خطای واقعی داد، برگردان
   if(r.code){
-    const res=await API.request(`/restaurant/reservations/${r.code}/status`,{method:'PATCH',body:JSON.stringify({status:to})});
-    if(!res.ok&&!res.offline){ r.status=old; r._events.pop(); renderResList(); toast('','تغییر وضعیت ناموفق بود'); }
+    const body={status:to}; if(reason) body.reason=reason;
+    const res=await API.request(`/restaurant/reservations/${r.code}/status`,{method:'PATCH',body:JSON.stringify(body)});
+    if(!res.ok&&!res.offline){ r.status=old; r.cancelReason=oldReason; r._events.pop(); renderResList(); toast('','تغییر وضعیت ناموفق بود — دوباره تلاش کن'); }
   }
 }
 async function viewHistory(i){
@@ -152,7 +158,8 @@ const API = {
     return { ok: false, status: r.status, error: r.error || { message: `خطای ${r.status}` } };
   },
   get(path){ return this.request(path); },
-  post(path, body){ return this.request(path, { method: 'POST', body: JSON.stringify(body || {}) }); },
+  // headers اختیاری: برای عملیاتِ حساس (مثلاً رزروِ دستی) که به Idempotency-Key نیاز دارند.
+  post(path, body, headers){ return this.request(path, { method: 'POST', body: JSON.stringify(body || {}), headers }); },
   patch(path, body){ return this.request(path, { method: 'PATCH', body: JSON.stringify(body || {}) }); },
   chatList(){ return this.get('/restaurant/chats'); },
   chatMessages(id, after){ return this.get('/restaurant/chats/'+id+(after?('?after='+encodeURIComponent(after)):'')); },
@@ -205,6 +212,7 @@ const API = {
   customerDetail(userId){ return this.get('/restaurant/customers/'+encodeURIComponent(userId)); },
   rfm(){ return this.get('/restaurant/rfm'); },
   aiRecommendations(){ return this.get('/restaurant/ai'); },
+  crmRecommendations(){ return this.get('/restaurant/crm/recommendations'); },
   // ── ورود بدون رزرو (walk-in واقعی، با عضویت خودکار باشگاه) ──
   walkin(body){ return this.post('/restaurant/walkin', body); },
   // ── نظرات، گالری، یادداشت پرسنل، رویداد، تاریخچه‌ی کمپین (همه واقعی) ──
@@ -225,6 +233,14 @@ const API = {
   },
   deletePhoto(id){ return this.delete('/restaurant/photos?id='+encodeURIComponent(id)); },
   notes(){ return this.get('/restaurant/notes'); },
+  // ── منو (CRUDِ واقعی؛ پیش از این هیچ روتی برایِ ساختِ آیتمِ منو نبود) ──
+  menuList(){ return this.get('/restaurant/menu'); },
+  menuCreate(body){ return this.post('/restaurant/menu', body); },
+  menuUpdate(id, body){ return this.request('/restaurant/menu/'+encodeURIComponent(id), { method:'PATCH', body: JSON.stringify(body) }); },
+  menuDelete(id){ return this.request('/restaurant/menu/'+encodeURIComponent(id), { method:'DELETE' }); },
+  // ── دستیارِ هوشمندِ آفلاین (فاز ۳): چتِ آزادمتن + حلقه‌ی خودآموزی (وصل به /restaurant/assistant) ──
+  assistantAsk(message){ return this.post('/restaurant/assistant', { message }); },
+  assistantFeedback(logId, intent){ return this.post('/restaurant/assistant/feedback', { log_id: logId, correct_intent: intent }); },
   addNote(body){ return this.post('/restaurant/notes', body); },
   pinNote(id, pinned){ return this.patch('/restaurant/notes', { id, pinned }); },
   deleteNote(id){ return this.delete('/restaurant/notes?id='+encodeURIComponent(id)); },
@@ -249,9 +265,20 @@ const API = {
   // ── ساعات کاری + تعطیلات (وصل به /restaurant/hours واقعی) ──
   hoursGet(){ return this.get('/restaurant/hours'); },
   hoursSave(body){ return this.request('/restaurant/hours', { method:'PUT', body: JSON.stringify(body||{}) }); },
+  // ── سیاستِ کنسلی (وصل به /restaurant/cancellation-policy واقعی) ──
+  cancellationPolicyGet(){ return this.get('/restaurant/cancellation-policy'); },
+  cancellationPolicySave(body){ return this.request('/restaurant/cancellation-policy', { method:'PUT', body: JSON.stringify(body||{}) }); },
   // ── چندشعبه‌ای: لیست شعبه‌ها + ساخت شعبه‌ی جدید ──
   branchesList(){ return this.get('/restaurant/branches'); },
   branchCreate(body){ return this.post('/restaurant/branches', body); },
+  // ── هویتِ رستوران: نام (وصل به GET/PUT /restaurant/profile واقعی) ──
+  profileSave(body){ return this.request('/restaurant/profile', { method:'PUT', body: JSON.stringify(body||{}) }); },
+  // ── فعالیتِ اخیر برایِ زنگوله‌یِ اعلان (وصل به /restaurant/notifications واقعی) ──
+  recentActivity(){ return this.get('/restaurant/notifications'); },
+  // ── مدیرِ هوشمندِ رستوران: پرسش‌وپاسخِ مستندِ Finding/Evidence/Confidence ──
+  managerInsights(){ return this.get('/restaurant/manager-insights'); },
+  // ── آمار رفتار مشتری + نقشه‌ی حرارتیِ شلوغی (روز×ساعت، همان دیتایِ تبِ آنالیتیکس) ──
+  analytics(){ return this.get('/restaurant/analytics'); },
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -425,7 +452,17 @@ const Heartbeat = {
 function dataSourceNote(){
   return API.online ? '' : `<div style="font-size:11px;color:var(--amber-600);background:var(--amber-50);padding:6px 12px;border-radius:8px;margin-bottom:14px;text-align:center">${icon('info',{size:13})} داده‌ی نمونه (بک‌اند متصل نیست)</div>`;
 }
-const RES = [
+// ⚠️ رفعِ باگ: این آرایه قبلاً «const RES» بود — یعنی هیچ‌وقت با دیتای واقعی
+// جایگزین نمی‌شد. renderResList (تبِ رزروها) از یک متغیرِ محلیِ جدا برای
+// دیتای واقعی استفاده می‌کرد، ولی داشبورد (calcTodayKPIs در overview.js:
+// رزروِ امروز، اشغالِ میز، عدمِ‌حضور، درآمد، «رزروهایِ امشب») همیشه از همین
+// RES ثابت می‌خواند — یعنی داشبورد برایِ هر رستورانِ واقعی، در هر جلسه‌ای،
+// همیشه همین دیتایِ نمونه را نشان می‌داد، نه فقط در بارگذاریِ اول بلکه حتیٰ
+// بعد از رفرشِ «زنده»یِ هر ۱۵ ثانیه (که خودش هم فقط دوباره از همین RESِ
+// ثابت محاسبه می‌کرد، بدونِ هیچ fetchی — رجوع کنید به refreshLiveKPIs).
+// حالا RES_DEMO فقط fallbackِ آفلاین/دموست (هم‌الگو با WL_DEMO_QUEUE در
+// waitlist.js) و RES با loadTodayReservationsForDashboard از سرور پر می‌شود.
+const RES_DEMO = [
   {t:'۱۸:۳۰',name:'نیلوفر رضایی',party:2,table:3,status:'arrived',seg:'vip',pre:true,note:'تولد همسر',phone:'۰۹۱۲۱۱۱۲۲۳۳',date:'today',dLabel:'امروز'},
   {t:'۱۹:۰۰',name:'امیر حسینی',party:4,table:7,status:'confirmed',seg:'new',pre:false,note:'',phone:'۰۹۱۲۲۲۲۳۳۴۴',date:'today',dLabel:'امروز'},
   {t:'۱۹:۰۰',name:'مریم و علی',party:2,table:2,status:'arrived',seg:'regular',pre:true,note:'',phone:'۰۹۱۲۳۳۳۴۴۵۵',date:'today',dLabel:'امروز'},
@@ -443,6 +480,25 @@ const RES = [
   {t:'۲۰:۳۰',name:'کاوه مرادی',party:6,table:9,status:'cancelled',seg:'vip',pre:false,note:'',phone:'۰۹۱۲۷۸۹۰۱۲۳',cancelReason:'تماس مشتری — تغییر برنامه',date:'past',dLabel:'۲ روز پیش'},
   {t:'۱۹:۰۰',name:'سپیده یاری',party:4,table:6,status:'completed',seg:'regular',pre:true,note:'',phone:'۰۹۱۲۸۹۰۱۲۳۴',date:'past',dLabel:'۳ روز پیش'},
 ];
+let RES = RES_DEMO.slice();
+let _resLoaded = false;
+/**
+ * رزروهای «امروز» را برایِ داشبورد از سرور می‌گیرد و RES را جایگزین می‌کند.
+ * عمداً از loadReservations (بالاتر) استفاده نمی‌کند — آن تابع RES_DATE_FILTER
+ * و RES_NEXT_CURSOR را هم عوض می‌کند (paginationِ تبِ رزروها)؛ اگر داشبورد هم
+ * از همان تابع استفاده می‌کرد، وقتی کاربر هم‌زمان تبِ رزروها را روی «آینده» یا
+ * «گذشته» باز داشت، رفرشِ ۱۵ثانیه‌ایِ داشبورد آن فیلتر/cursor را خرابمی‌کرد.
+ */
+async function loadTodayReservationsForDashboard(){
+  if(!API.getToken()) return false;
+  const res=await API.get('/restaurant/reservations?date=today');
+  if(res.ok && Array.isArray(res.data?.reservations)){
+    RES=res.data.reservations.map(mapResRow);
+    _resLoaded=true;
+    return true;
+  }
+  return false;
+}
 // میزها — الان از API واقعی (/restaurant/tables) لود می‌شه، نه نمونه‌ی ثابت
 // نگاشت وضعیت: بک‌اند از 'occupied' استفاده می‌کنه، رابط کاربری همیشه 'seated' نشون می‌داده
 const BK2UI_STATE = { free:'free', reserved:'reserved', occupied:'seated', cleaning:'free', maintenance:'free' };
@@ -470,12 +526,101 @@ async function loadTables(){
   _tablesLoaded = true;
   return TABLES;
 }
-const GUESTS=[
+// ⚠️ رفعِ باگ (همان الگویِ RES): این آرایه قبلاً «const GUESTS» بود — یعنی
+// ویجتِ «مشتریانِ برتر» در داشبورد (overview.js: renderTopCustomers) و مودالِ
+// «تاریخچه‌ی مشتری» (viewCustomerHistory) همیشه همین ۴ مشتریِ نمونه را نشان
+// می‌دادند، برایِ هر رستورانِ واقعی. توجه: تبِ کاملِ «هوشِ مشتری»
+// (crm.js: rCustomers/custRenderOverviewDemo) از قبل درست بود — از
+// API.customers واقعی می‌خواند و custRenderOverviewDemo فقط در نبودِ توکن/
+// خطایِ API صدا زده می‌شود؛ فقط این دو مصرف‌کننده در overview.js اشتباه بودند.
+// GUESTS_DEMO فقط fallbackِ آفلاین است (هم‌الگو با RES_DEMO/WL_DEMO_QUEUE).
+const GUESTS_DEMO=[
   {name:'کیان موسوی',ava:'',seg:'vip',visits:18,last:'۳ روز پیش',spent:'۶.۲م',vip:95,ret:92,churn:8,phone:'۰۹۱۲۵۵۵۶۶۷۷',birthday:'۱۵ خرداد',points:3400},
   {name:'نیلوفر رضایی',ava:'',seg:'regular',visits:12,last:'امروز',spent:'۳.۸م',vip:62,ret:78,churn:20,phone:'۰۹۱۲۳۳۳۴۴۵۵',birthday:'۲ آبان',points:1900},
   {name:'امیر حسینی',ava:'',seg:'new',visits:3,last:'هفته پیش',spent:'۸۹۰ک',vip:30,ret:55,churn:45,phone:'۰۹۱۲۷۷۷۸۸۹۹',birthday:'۸ دی',points:300},
   {name:'مریم احمدی',ava:'',seg:'risk',visits:6,last:'۳۵ روز پیش',spent:'۱.۵م',vip:35,ret:30,churn:82},
 ];
+let GUESTS=GUESTS_DEMO.slice();
+let _guestsLoaded=false;
+/**
+ * ۵ مشتریِ برترِ رستوران (بر اساسِ تعدادِ بازدید) را از همان
+ * /restaurant/customers که تبِ «هوشِ مشتری» استفاده می‌کند می‌گیرد.
+ * نگاشتِ فیلدها: seg فقط برایِ نشانِ VIP لازم است (is_vip بولی، نه رشته‌ی
+ * سگمنتِ RFM که تاکسونومیِ جداگانه‌ای دارد). ret (٪بازگشت) از رویِ معکوسِ
+ * churn_risk_score تخمین زده می‌شود — نزدیک‌ترین معادلِ واقعیِ موجود.
+ * birthday/points عمداً ست نمی‌شوند (این API آن‌ها را ندارد؛ رندرِ شرطیِ
+ * موجود در viewCustomerHistory به‌جایِ نمایشِ مقدارِ ساختگی، مخفی می‌ماند).
+ * predicted_clv_toman فعلاً برایِ همه صفر است چون هیچ سیستمِ صندوق/پرداختی
+ * وصل نیست (رجوع کنید به REVENUE_CONFIG.connected=false در overview.js) —
+ * صفرِ واقعی را به‌جایِ «۰ تومان» با «—» نشان می‌دهیم تا «مشتریِ VIP با ۸
+ * بازدید ولی صفر تومان خرید» به‌نظر متناقض/اشتباه نرسد؛ این یعنی «هنوز
+ * دیتایِ خرید نداریم»، نه «صفر خرج کرده».
+ */
+async function loadTopGuestsForDashboard(){
+  if(!API.getToken()) return false;
+  const res=await API.customers('sort=visits&limit=5');
+  if(res.ok && Array.isArray(res.data?.items)){
+    GUESTS=res.data.items.map(c=>({
+      name:c.name, ava:'', seg:c.is_vip?'vip':'',
+      visits:c.total_visits||0,
+      spent:c.predicted_clv_toman>0?fmtMoney(c.predicted_clv_toman):'—',
+      phone:toFaDigits(c.phone||''),
+      // Math.min هم لازم است، نه فقط max: churn_risk_score تئوریاً باید ۰-۱۰۰
+      // باشد (رفعِ باگش در customer-insights.ts)، ولی این عددِ مشتق‌شده تا
+      // ۶۰ ثانیه کش می‌شود؛ کلمپِ دولایه یعنی حتی یک مقدارِ کهنه/منفی هم
+      // «۱۰۱٪ بازگشت» در UI نشان نمی‌دهد.
+      ret:c.churn_risk_score!=null?Math.min(100,Math.max(0,100-c.churn_risk_score)):0,
+    }));
+    _guestsLoaded=true;
+    return true;
+  }
+  return false;
+}
+// ⚠️ رفعِ باگ (یافته‌ی سوم از همان دسته‌یِ RES/GUESTS/NOTIFS): renderInsights
+// (overview.js) یک بینشِ هاردکد داشت: «جمعه شب پرترددترین زمان توست» — عیناً
+// برایِ هر رستوران نشان داده می‌شد، حتی اگر روزِ شلوغِ واقعی‌اش چیزِ دیگری
+// بود. اینجا همان تحلیلِ واقعیِ AI Restaurant Manager (manager-insights →
+// پاسخِ strongest_weekdays) را می‌خوانیم؛ اگر داده کم باشد (کمتر از ۵ روزِ
+// متمایز یا کمتر از ۳۰ رزرو در ۶۰ روزِ اخیر) آن پاسخ اصلاً برنمی‌گردد و ما
+// هم بینش را نشان نمی‌دهیم — نه یک ادعایِ ساختگی.
+let WEEKDAY_INSIGHT=null;
+let _weekdayInsightLoaded=false;
+async function loadWeekdayInsightForDashboard(){
+  if(!API.getToken()) return false;
+  const res=await API.managerInsights();
+  if(res.ok && Array.isArray(res.data?.answers)){
+    const a=res.data.answers.find(x=>x.id==='strongest_weekdays');
+    WEEKDAY_INSIGHT=a?{t:a.finding, d:a.recommended_action||'کارکنان بیشتری برای این روزها برنامه‌ریزی کن'}:null;
+    _weekdayInsightLoaded=true;
+    return true;
+  }
+  // manager-insights پشتِ canViewAnalytics است — کارمندِ بدونِ این مجوز
+  // همیشه ۴۰۳ می‌گیرد. بدونِ این شرط، rOverview هر بار دوباره تلاش می‌کرد
+  // (fetch بی‌فایده‌ی تکراری)؛ ۴۰۳ یعنی دیگر تلاش نکن، نه یک خطایِ موقت.
+  if(res.status===403){ _weekdayInsightLoaded=true; return false; }
+  return false;
+}
+// ⚠️ رفعِ باگ: نقشه‌ی حرارتیِ هفتگی در renderHeatmap (overview.js) یک
+// جدولِ ۷×۳ کاملاً هاردکد بود («آخر هفته شب شلوغ‌تر») بدونِ هیچ مسیری به
+// دیتایِ واقعی — برخلافِ RES/GUESTS که حداقل fallback بودند، این یکی هرگز
+// جایگزین نمی‌شد. همان heatmap واقعیِ /restaurant/analytics (که تبِ
+// مارکتینگ/آنالیتیکس هم می‌خواند) را می‌گیریم و در renderHeatmap بر اساسِ
+// ساعت به ۳ بازه‌ی ظهر/عصر/شب دسته‌بندی می‌کنیم.
+let HEATMAP_DATA=null;
+let _heatmapLoaded=false;
+async function loadHeatmapForDashboard(){
+  if(!API.getToken()) return false;
+  const res=await API.analytics();
+  if(res.ok && Array.isArray(res.data?.heatmap)){
+    HEATMAP_DATA=res.data.heatmap; // [{dow,hour,count}] — dow: 0=یکشنبه..6=شنبه (Postgres DOW)
+    _heatmapLoaded=true;
+    return true;
+  }
+  // analytics هم پشتِ canViewAnalytics است — همان دلیلِ weekday insight:
+  // ۴۰۳ یعنی دیگر تلاش نکن، وگرنه هر rOverview دوباره fetch بی‌فایده می‌زد.
+  if(res.status===403){ _heatmapLoaded=true; return false; }
+  return false;
+}
 // باشگاه مشتریان — دیتای واقعی و زنده
 let CLUB=[
   {fn:'کیان',ln:'موسوی',phone:'۰۹۱۲۵۵۵۶۶۷۷',code:'VIS-1001',tier:'gold',points:1240,bMonth:'خرداد',joined:'۳ ماه پیش'},
@@ -547,6 +692,9 @@ function mapResRow(r){
     status:mapResStatus(r.status), seg:'regular', pre:(r.preorder&&r.preorder.length>0),
     note:r.note||'', phone:toFaDigits(r.phone||''), date:cat,
     dLabel:{today:'امروز',tomorrow:'فردا',upcoming:'آینده',past:'گذشته'}[cat], code:r.code,
+    // نشانِ اعتبارِ رزرو (economy.ts) — از loyalty/seg کاملاً جداست، رجوع کن
+    // به توضیحِ REPUTATION_BADGE در reservations.js
+    reputationTier:r.reputation_tier||null,
   };
 }
 async function loadReservations(dateFilter){
@@ -575,8 +723,13 @@ async function loadMoreReservations(){
 let REVIEWS=[];
 // عکس‌های گالری — از /restaurant/photos واقعی لود می‌شن
 let GALLERY=[];
-// هویت رستوران (نام + لوگو: ایموجی یا عکس)
-let RESTAURANT={name:'کافه‌رستوران ویستا',logoEmoji:'🌿',logoDataUrl:null,logoGradient:'linear-gradient(135deg,#34D399,#059669)'};
+// هویت رستوران — name اینجا فقط پیش‌فرضِ اولیه/دموست؛ با اولین اجرایِ
+// renderBranchSwitcher (routing.js، بعد از لاگینِ واقعی) از /restaurant/branches
+// همگام می‌شود، و «تغییرِ نام» (crm.js) با PUT /restaurant/profile واقعاً
+// روی سرور ذخیره می‌کند (رجوع کنید به رفعِ باگِ نامِ رستوران).
+// logoEmoji/logoGradient فقط نمایِ جایگزینِ محلی‌اند تا لوگویِ واقعی (یک
+// RestaurantPhoto با category='logo'، در GALLERY) آپلود/تأیید شود.
+let RESTAURANT={name:'کافه‌رستوران ویستا',logoEmoji:'🌿',logoGradient:'linear-gradient(135deg,#34D399,#059669)'};
 function normalizePhone(p){return (p||'').replace(/\s/g,'').replace(/[0-9]/g,d=>'۰۱۲۳۴۵۶۷۸۹'[d])}
 // اتصال خودکار: هر رزرو → ثبت در باشگاه (بدون تکرار، کلید: تلفن)
 function enrollClub(name,phone){
@@ -592,6 +745,6 @@ function enrollClub(name,phone){
   return {enrolled:true,member};
 }
 
-const TITLES={overview:'داشبورد',reservations:'مدیریت رزروها',waitlist:'لیست انتظار',floor:'پلان سالن',profile:'پروفایل و نظرات',customers:'مشتریان',loyalty:'باشگاه مشتریان',marketing:'بازاریابی',analytics:'آنالیتیکس',cashback:'تنظیم کش‌بک',staff:'کارکنان',pricing:'قیمت‌گذاری',chat:'پیام‌ها'};
+const TITLES={menu:'منو',overview:'داشبورد',reservations:'مدیریت رزروها',waitlist:'لیست انتظار',floor:'پلان سالن',profile:'پروفایل و نظرات',customers:'مشتریان',loyalty:'باشگاه مشتریان',marketing:'بازاریابی',analytics:'آنالیتیکس',cashback:'تنظیم کش‌بک',staff:'کارکنان',pricing:'قیمت‌گذاری',chat:'پیام‌ها'};
 
 // ═══════════ ROUTING ═══════════

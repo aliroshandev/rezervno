@@ -63,7 +63,11 @@ export function withRestaurantAuth(
         const restaurant = await resolveStaffRestaurant(auth, req);
         if (opts.permission) await requirePermission(auth, opts.permission);
 
-        const res = await handler(req, { auth, restaurant }, routeArg?.params);
+        // در این نسخه‌ی Next.js، `params` یک Promise است (routeArg?.params)؛
+        // باید await شود وگرنه هیچ route داینامیکی پارامترش را درست نمی‌گیرد و
+        // ۴۲۲ (validator) می‌دهد. رجوع کن به توضیحِ همان باگ در برنچِ menu-crud.
+        const params = routeArg?.params ? await routeArg.params : undefined;
+        const res = await handler(req, { auth, restaurant }, params);
         status = res.status;
         res.headers.set('x-trace-id', traceId);
         return res;

@@ -2,6 +2,7 @@ import { db } from './db';
 import { invalidateAvailability } from './availability-cache';
 import { Err } from './errors';
 import { enqueueSms, type SmsJob } from './sms';
+import { recordOutcome, noShowOutcomeLabel } from './prediction-ledger';
 
 // ═══════════════════════════════════════════════════════════
 //  چرخه‌ی حیات رزرو رزرونو — state machine + اعلان + audit log
@@ -105,6 +106,24 @@ export async function transitionReservation(opts: {
 
     return { resv: updated, changed: true };
   });
+
+  // ── دفترِ نتیجه (فاز ۴): فقط وضعیت‌هایِ پایانیِ *معنادار برایِ مدلِ no-show*
+  // برچسب می‌گیرند (noShowOutcomeLabel تصمیم می‌گیرد؛ لغو/انقضا برچسب نمی‌گیرند
+  // چون مدل درباره‌شان ادعایی نکرده بود). بدونِ await و با رفتارِ بی‌اثر روی
+  // خطا — مثلِ economy و SMS بالا، ثبتِ تحلیلی هرگز تغییرِ وضعیت را نمی‌شکند.
+  if (result.changed) {
+    const label = noShowOutcomeLabel(result.resv.status);
+    if (label !== null) {
+      void recordOutcome({
+        restaurantId: result.resv.restaurantId,
+        predictionType: 'no_show',
+        subjectType: 'reservation',
+        subjectId: result.resv.id,
+        outcomeLabel: label,
+        outcomeStatus: result.resv.status,
+      });
+    }
+  }
 
   // بعد از commit: اعلان (خارج از transaction تا تراکنش را کند نکند)
   if (result.changed && notify) {

@@ -142,6 +142,15 @@ model Restaurant {
   @@index([tenantId])
   @@index([city], map: "idx_restaurants_city")
   chatThreads  ChatThread[]
+  // ── دستیارِ هوشمندِ رستوران (migration 050, phase 3) ──
+  assistantVocab  RestaurantAssistantVocab[]
+  assistantLogs   RestaurantAssistantLog[]
+  // ── پلتفرمِ هوش (فاز ۴): مدل‌هایِ یادگرفته + دفترِ پیش‌بینی/نتیجه ──
+  noShowModel      RestaurantNoShowModel?
+  demandForecast   RestaurantDemandForecast?
+  modelTrainingRuns ModelTrainingRun[]
+  modelPredictions ModelPrediction[]
+  modelOutcomes    ModelOutcome[]
   @@map("restaurants")
 }
 
@@ -223,6 +232,8 @@ model MenuItem {
   priceToman   Int               @map("price_toman")
   isActive     Boolean           @default(true) @map("is_active")
   soldCount    Int               @default(0) @map("sold_count")
+  // دسته‌بندیِ منو (پیش‌غذا/اصلی/دسر/نوشیدنی/…). NULL = دسته‌بندی‌نشده.
+  category     String?
   inOrders     ReservationItem[]
   // کوئری منو: آیتم‌های فعال یک رستوران
   @@index([restaurantId, isActive])
@@ -586,12 +597,18 @@ model CustomerInsight {
 
   segment           CustomerSegment @default(new_customer)
   isVip             Boolean         @default(false) @map("is_vip")
+  // ── امتیازِ هوشِ مشتری (فاز ۴، پلتفرمِ هوش) ──
+  // ترکیبِ وزن‌دارِ چهار سیگنالِ از‌قبل‌محاسبه‌شده — جزئیات در
+  // lib/customer-intelligence.ts. NULL = هنوز محاسبه نشده.
+  intelligenceScore Int?            @map("intelligence_score")   // ۰..۱۰۰، بالاتر = باارزش‌تر
+  intelligenceTier  String?         @map("intelligence_tier")    // 'low' | 'medium' | 'high'
   updatedAt         DateTime        @updatedAt @map("updated_at")
 
   @@id([restaurantId, userId])
   // داشبورد: مرتب‌سازی بر اساس CLV یا فیلتر سگمنت
   @@index([restaurantId, segment, predictedClvToman(sort: Desc)])
   @@index([restaurantId, churnRiskScore(sort: Desc)])
+  @@index([intelligenceScore(sort: Desc)])
   @@map("customer_insights")
 }
 
@@ -1319,4 +1336,133 @@ model SiteInquiry {
   updatedAt   DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz
   @@index([status, createdAt(sort: Desc)])
   @@map("site_inquiries")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  دستیارِ هوشمندِ رستوران (migration 050, phase 3) — کاملاً آفلاین
+//  چت‌باتِ پرسش‌وپاسخِ آزادمتنِ فارسی برای پنلِ بیزنس، بدونِ هیچ فراخوانیِ
+//  AI/LLM بیرونی. طبقه‌بندِ نیت (lib/assistant-nlu.ts) یک Naive Bayesِ
+//  دستی‌ست که با چند جمله‌ی seed شروع می‌شود و از تعاملِ واقعیِ کارمندها
+//  خودآموزی می‌کند (lib/assistant.ts). جزئیاتِ کاملِ الگوریتم در
+//  lib/assistant-nlu.ts.
+// ═══════════════════════════════════════════════════════════════════════
+
+// شمارشِ کلمه→نیتِ یادگرفته‌شده — حافظه‌ی خودآموزیِ Naive Bayes.
+model RestaurantAssistantVocab {
+  id           String     @id @default(uuid()) @db.Uuid
+  restaurantId String     @map("restaurant_id") @db.Uuid
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+  intent       String     // یکی از مقادیرِ ASSISTANT_INTENTS در lib/assistant-nlu.ts
+  word         String     // توکنِ نرمال‌شده‌ی فارسی (lib/assistant-nlu.ts → tokenize)
+  count        Int        @default(1)
+  updatedAt    DateTime   @default(now()) @updatedAt @map("updated_at")
+  @@unique([restaurantId, intent, word])
+  @@index([restaurantId])
+  @@map("restaurant_assistant_vocab")
+}
+
+// هر سؤالِ پرسیده‌شده — برایِ شفافیت (چقدر دقیقه) و منبعِ یادگیری.
+model RestaurantAssistantLog {
+  id             String     @id @default(uuid()) @db.Uuid
+  restaurantId   String     @map("restaurant_id") @db.Uuid
+  restaurant     Restaurant @relation(fields: [restaurantId], references: [id])
+  staffId        String?    @map("staff_id") @db.Uuid // بدونِ FK سخت‌گیر — مثلِ staff_notes.author_staff_id
+  question       String
+  detectedIntent String?    @map("detected_intent")
+  confidence     Float      @default(0)
+  wasCorrected   Boolean    @default(false) @map("was_corrected")
+  finalIntent    String?    @map("final_intent")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  @@index([restaurantId, createdAt(sort: Desc)])
+  @@map("restaurant_assistant_logs")
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  پلتفرمِ هوش (فاز ۴) — مدل‌هایِ یادگرفته + دفترِ پیش‌بینی/نتیجه
+//  جزئیاتِ کامل الگوریتم در lib/ml-core.ts / lib/no-show-model.ts /
+//  lib/demand-forecast.ts / lib/model-evaluation.ts.
+// ═══════════════════════════════════════════════════════════════════════
+
+// مدلِ no-show یادگرفته‌شده‌ی هر رستوران. isActive عمداً پیش‌فرض false است:
+// فقط وقتی جایگزینِ heuristic می‌شود که روی هولدآوتِ زمانی-بعدی واقعاً بهتر
+// عمل کند؛ اگر بهتر نبود، بی‌صدا به قانونِ دستی برمی‌گردد (هیچ‌وقت مدلِ
+// بدتر از heuristic فعال نمی‌ماند).
+model RestaurantNoShowModel {
+  restaurantId  String     @id @map("restaurant_id") @db.Uuid
+  restaurant    Restaurant @relation(fields: [restaurantId], references: [id])
+  // ترتیب: [بایاس، دارد‌سابقه، نرخِ‌no-showِ‌قبلی، last-minute، خیلی‌زودهنگام،
+  // گروهِ‌بزرگ، منبع‌تلفن] — هم‌تراز با NO_SHOW_FEATURE_NAMES در lib/no-show-model.ts
+  weights       Float[]    @map("weights")
+  sampleSize    Int        @map("sample_size")
+  positiveCount Int        @map("positive_count")
+  learnedBrier  Float      @map("learned_brier")
+  staticBrier   Float      @map("static_brier")
+  isActive      Boolean    @default(false) @map("is_active")
+  trainedAt     DateTime   @default(now()) @map("trained_at")
+  @@map("restaurant_no_show_models")
+}
+
+// پیش‌بینیِ تقاضا — سری‌زمانیِ Holt-Winters جمعی. countModel/coversModel هرکدام
+// یک SeriesModelState سریالایزشده‌ی JSONB هستند (شفاف و قابلِ‌بازرسی — نه black-box).
+model RestaurantDemandForecast {
+  restaurantId String     @id @map("restaurant_id") @db.Uuid
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+  historyDays  Int        @map("history_days")
+  countModel   Json       @map("count_model")
+  coversModel  Json       @map("covers_model")
+  trainedAt    DateTime   @default(now()) @map("trained_at")
+  @@map("restaurant_demand_forecasts")
+}
+
+// تاریخچه‌ی append-only آموزشِ مدل‌ها — هر اجرایِ آموزش یک ردیف، مستقل از
+// فعال‌شدن یا نه؛ برایِ داشبوردِ سلامتِ مدل و تستِ بایاس. هیچ UPDATE/DELETE.
+model ModelTrainingRun {
+  id            String     @id @default(uuid()) @db.Uuid
+  restaurantId  String     @map("restaurant_id") @db.Uuid
+  restaurant    Restaurant @relation(fields: [restaurantId], references: [id])
+  kind          String     @map("kind") // 'no_show' | 'demand_forecast'
+  sampleSize    Int        @map("sample_size")
+  metrics       Json       @map("metrics") // no_show: {learnedBrier, staticBrier} — demand: {mae, baselineMae}
+  isActive      Boolean    @map("is_active")
+  reason        String?    @map("reason")
+  trainedAt     DateTime   @default(now()) @map("trained_at")
+  @@index([restaurantId, kind, trainedAt])
+  @@map("model_training_runs")
+}
+
+// دفترِ پیش‌بینی — هر پیش‌بینیِ واقعیِ تولید با نسخه‌ی مدل و بردارِ ویژگیِ
+// بدونِ PII ثبت می‌شود. append-only (مثلِ ModelOutcome و ModelTrainingRun).
+model ModelPrediction {
+  id             String     @id @default(uuid()) @db.Uuid
+  restaurantId   String     @map("restaurant_id") @db.Uuid
+  restaurant     Restaurant @relation(fields: [restaurantId], references: [id])
+  predictionType String     @map("prediction_type") // 'no_show'
+  subjectType    String     @map("subject_type")    // 'reservation'
+  subjectId      String     @map("subject_id") @db.Uuid
+  modelSource    String     @map("model_source")    // 'learned' | 'heuristic'
+  modelVersion   String     @map("model_version")
+  featureVersion Int        @default(1) @map("feature_version")
+  features       Json       @map("features")   // بدونِ PII — فقط سیگنالِ عددی/بولی
+  probability    Float      @map("probability") // ۰..۱
+  predictedAt    DateTime   @default(now()) @map("predicted_at")
+  horizonAt      DateTime?  @map("horizon_at")
+  @@unique([predictionType, subjectType, subjectId, modelVersion], map: "model_predictions_subject_version_uidx")
+  @@index([restaurantId, predictionType, predictedAt], map: "model_predictions_restaurant_type_idx")
+  @@map("model_predictions")
+}
+
+// دفترِ نتیجه — واقعیتِ موقعِ معلوم‌شدنِ هر پیش‌بینی. append-only.
+model ModelOutcome {
+  id             String     @id @default(uuid()) @db.Uuid
+  restaurantId   String     @map("restaurant_id") @db.Uuid
+  restaurant     Restaurant @relation(fields: [restaurantId], references: [id])
+  predictionType String     @map("prediction_type")
+  subjectType    String     @map("subject_type")
+  subjectId      String     @map("subject_id") @db.Uuid
+  outcomeLabel   Float      @map("outcome_label") // ۱ = رخ داد، ۰ = رخ نداد (Float برای رگرسیون بعدی)
+  outcomeStatus  String     @map("outcome_status")
+  occurredAt     DateTime   @default(now()) @map("occurred_at")
+  @@unique([predictionType, subjectType, subjectId], map: "model_outcomes_subject_uidx")
+  @@index([restaurantId, predictionType, occurredAt], map: "model_outcomes_restaurant_type_idx")
+  @@map("model_outcomes")
 }

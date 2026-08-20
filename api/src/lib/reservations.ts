@@ -8,6 +8,8 @@ import { metrics } from './metrics';
 import { validateCoupon, calcDiscount, redeemCouponAtomicTx } from './coupons';
 import { redeemGiftCardTx } from './loyalty';
 import { computeNoShowRisk as defaultNoShowPredictor } from './customer-insights';
+import type { NoShowResult } from './customer-insights';
+import { recordPrediction, NO_SHOW_FEATURE_VERSION } from './prediction-ledger';
 import { type OpeningHours } from './hours';
 import { computeRanges, genReservationCode, isConflictError, isSerializationError } from './reservation-helpers';
 import { ACTIVE_RESERVATION_STATUSES } from './reservation-status';
@@ -31,8 +33,8 @@ const ACTIVE_STATUSES_FRAGMENT = Prisma.join(
  * در این مقیاس، over-engineering محسوب می‌شود.)
  */
 export type NoShowPredictor = (input: {
-  userId: string | null; partySize: number; slotStart: Date; createdAt: Date; source: string;
-}) => Promise<{ score: number; tier: 'low' | 'medium' | 'high' }>;
+  userId: string | null; restaurantId: string; partySize: number; slotStart: Date; createdAt: Date; source: string;
+}) => Promise<NoShowResult>;
 
 // ═══════════════════════════════════════════════════════════
 //  موتور رزرو رزرونو — نسخه‌ی production
@@ -183,7 +185,7 @@ export async function createReservation(
 
   // ── فاز v2: پیش‌بینی ریسک no-show — قبل از تراکنش، فقط خوانش تاریخچه ──
   const noShowRisk = await predictNoShowRisk({
-    userId: input.userId ?? null, partySize: input.partySize, slotStart: start,
+    userId: input.userId ?? null, restaurantId: r.id, partySize: input.partySize, slotStart: start,
     createdAt: new Date(), source: input.source,
   });
 
@@ -221,7 +223,7 @@ async function placeReservation(
   ranges: { start: Date; end: Date; blockEnd: Date; duration: number; blockBufferMin: number },
   candidateTableIds: string[],
   manualTableNumber: number | null,
-  noShowRisk: { score: number; tier: 'low' | 'medium' | 'high' },
+  noShowRisk: NoShowResult,
 ) {
   const { start, end, blockEnd, duration, blockBufferMin } = ranges;
   const isHold = input.hold === true;
@@ -239,7 +241,7 @@ async function placeReservation(
         if (candidateTableIds.length > 0) {
           const occRows = await tx.$queryRaw<{ table_id: string }[]>`
             SELECT DISTINCT table_id FROM reservations
-            WHERE status IN (${ACTIVE_STATUSES_FRAGMENT})
+WHERE status::text IN (${ACTIVE_STATUSES_FRAGMENT})
               AND table_id = ANY(${candidateTableIds}::uuid[])
               AND tsrange(slot_start, block_end) && tsrange(${start}::timestamp, ${blockEnd}::timestamp)
           `;
@@ -297,6 +299,30 @@ async function placeReservation(
     payload: { code: result.resv.code, party_size: input.partySize, slot_start: result.resv.slotStart, status: result.resv.status },
   });
 
+  // ── دفترِ پیش‌بینی (فاز ۴): ثبتِ «چه چیزی، با کدام مدل، بر اساسِ چه ورودی‌ای» ──
+  // قبلاً امتیازِ ریسک در ستونِ no_show_risk_score می‌نشست ولی منبع و نسخه‌ی
+  // مدلش دور ریخته می‌شد؛ بعداً نمی‌شد سنجید در تولید مدلِ یادگرفته بهتر از
+  // heuristic بوده یا نه. نتیجه‌ی واقعیِ همین رزرو در lib/lifecycle.ts کنارِ
+  // این ردیف ثبت می‌شود و سنجش از joinِ این دو می‌آید (lib/model-evaluation.ts).
+  // خارج از تراکنش و بدونِ await روی مسیرِ پاسخ — مثلِ emit بالا: شکستِ ثبتِ
+  // تحلیلی هرگز رزروِ موفق را خراب نمی‌کند؛ recordPrediction هم throw نمی‌کند.
+  if (noShowRisk.probability !== undefined && noShowRisk.modelVersion && noShowRisk.features) {
+    void recordPrediction({
+      restaurantId: r.id,
+      predictionType: 'no_show',
+      subjectType: 'reservation',
+      subjectId: result.resv.id,
+      modelSource: noShowRisk.source ?? 'heuristic',
+      modelVersion: noShowRisk.modelVersion,
+      featureVersion: NO_SHOW_FEATURE_VERSION,
+      features: noShowRisk.features,
+      probability: noShowRisk.probability,
+      // افقِ دانستنِ نتیجه = شروعِ اسلات. قبل از آن «هنوز معلوم نیست»،
+      // نه «مدل اشتباه کرد».
+      horizonAt: result.resv.slotStart,
+    });
+  }
+
   return {
     code: result.resv.code,
     status: result.resv.status,
@@ -320,7 +346,7 @@ async function insertReservation(
     holdExpiresAt: Date | null;
     start: Date; end: Date; duration: number; blockBufferMin: number;
     tableId: string; mergedNumbers: number[]; tableNumber: number;
-    noShowRisk: { score: number; tier: 'low' | 'medium' | 'high' };
+    noShowRisk: NoShowResult;
   },
 ) {
   const { input, r } = p;
@@ -471,7 +497,7 @@ async function tryMergeTables(
   //    تست‌شده روی Postgres: ~۰.۳ms برای ۱۰۰۰ رزرو با استفاده از ایندکس GiST. ──
   const occupiedRows = await tx.$queryRaw<{ table_id: string }[]>`
     SELECT DISTINCT table_id FROM reservations
-    WHERE status IN (${ACTIVE_STATUSES_FRAGMENT})
+    WHERE status::text IN (${ACTIVE_STATUSES_FRAGMENT})
       AND table_id IS NOT NULL
       AND tsrange(slot_start, block_end) && tsrange(${start}::timestamp, ${blockEnd}::timestamp)
   `;

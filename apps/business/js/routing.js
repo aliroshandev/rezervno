@@ -9,6 +9,7 @@ const VIEW_PERMISSION = {
   waitlist:     'canManageWaitlist',
   floor:        'canManageTables',
   profile:      'canManageSettings',
+  menu:         'canManageSettings',
   cashback:     'canManageSettings',
   pricing:      'canManageSettings',
   marketing:    'canManageCampaigns',
@@ -44,7 +45,7 @@ function nav(v){
   document.getElementById('v-'+v).classList.add('active');
   document.querySelectorAll('.sb-item').forEach(i=>i.classList.toggle('active',i.dataset.v===v));
   document.getElementById('tbTitle').textContent=TITLES[v];
-  ({overview:rOverview,reservations:rReservations,waitlist:rWaitlist,floor:rFloor,profile:rProfile,customers:rCustomers,loyalty:rLoyalty,marketing:rMarketing,analytics:rAnalytics,cashback:rCashback,staff:rStaff,pricing:rPricing,chat:rChat})[v]();
+  ({overview:rOverview,reservations:rReservations,waitlist:rWaitlist,floor:rFloor,profile:rProfile,menu:rMenu,customers:rCustomers,loyalty:rLoyalty,marketing:rMarketing,analytics:rAnalytics,cashback:rCashback,staff:rStaff,pricing:rPricing,chat:rChat})[v]();
   if(window.innerWidth<=768)closeSidebar();
   document.querySelector('.content').scrollTop=0;
 }
@@ -72,6 +73,15 @@ function renderBranchSwitcher(){
   if(metaEl) metaEl.textContent=BRANCH_LOCKED?'قفل‌شده به این شعبه':(BRANCHES.length>1?`${fa(BRANCHES.length)} شعبه`:'شعبه اصلی');
   const sw=document.querySelector('.sb-switch');
   if(sw) sw.classList.toggle('locked', BRANCH_LOCKED || BRANCHES.length<=1);
+  // ⚠️ رفعِ باگ: RESTAURANT.name (پیش‌فرضِ data.js) هاردکد است و هیچ‌وقت
+  // به‌تنهایی از سرور خوانده نمی‌شد — تبِ «پروفایل» همیشه نامِ دموی
+  // «کافه‌رستوران ویستا» را نشان می‌داد، صرف‌نظر از رستورانِ واقعیِ لاگین‌شده.
+  // اینجا همان دیتایی که برایِ سوییچرِ شعبه (بالا) از سرور آمده، به RESTAURANT
+  // هم می‌رسد — بدونِ فراخوانیِ اضافه — و اگر تبِ پروفایل باز است دوباره رندر می‌شود.
+  if(cur && typeof RESTAURANT!=='undefined' && RESTAURANT.name!==cur.name){
+    RESTAURANT.name=cur.name;
+    if(typeof profTab!=='undefined' && document.getElementById('v-profile')?.classList.contains('active') && typeof profRenderGallery==='function') profRenderGallery();
+  }
 }
 function openBranchSwitcher(){
   if(!API.getToken()){ toast('','برای سوییچ شعبه اول وارد شو'); return; }
@@ -98,9 +108,27 @@ async function selectBranch(id){
   if(typeof _segCounts!=='undefined') _segCounts=null;
   if(typeof _mktLoaded!=='undefined') _mktLoaded=false;
   if(typeof _hoursLoaded!=='undefined') _hoursLoaded=false;
+  // ⚠️ رفعِ باگ (ریویوی Copilot روی PR + یافته‌ی مشابه در خودِ RES/GUESTS
+  // که از PR #5 جا مانده بود): این ۵ کش هم به‌شعبه وابسته‌اند ولی اینجا
+  // reset نمی‌شدند — یعنی بعد از سوییچِ شعبه، داشبورد تا مدتی دیتایِ
+  // شعبه‌ی قبلی (رزروها، مهمان‌های برتر، اعلان‌ها، بینشِ روزِ هفته، نقشه‌ی
+  // حرارتی) را نشان می‌داد، چون گاردِ «if(!_xLoaded)» اجازه‌ی fetchِ
+  // دوباره را نمی‌داد.
+  if(typeof _resLoaded!=='undefined') _resLoaded=false;
+  if(typeof _guestsLoaded!=='undefined') _guestsLoaded=false;
+  if(typeof _notifsLoaded!=='undefined') _notifsLoaded=false;
+  if(typeof _weekdayInsightLoaded!=='undefined') _weekdayInsightLoaded=false;
+  if(typeof _heatmapLoaded!=='undefined') _heatmapLoaded=false;
   await loadBranches();
   await loadTables();
   refreshActiveView();
+  // زنگوله‌ی اعلان برخلافِ تب‌ها (که refreshActiveView فقط تبِ فعال را
+  // دوباره fetch می‌کند) همیشه روی صفحه است، مستقلِ تبِ جاری — پس باید
+  // اینجا صریحاً دوباره بارگذاری شود، وگرنه اعلان‌های شعبه‌ی قبلی تا
+  // لاگینِ بعدی روی صفحه می‌مانند حتی با وجودِ ریست‌شدنِ _notifsLoaded.
+  if(typeof loadNotifications==='function' && API.getToken()){
+    loadNotifications().then(ok=>{ if(ok && typeof renderNotifList==='function') renderNotifList(); });
+  }
   toast('','شعبه عوض شد');
 }
 function toggleSidebar(){

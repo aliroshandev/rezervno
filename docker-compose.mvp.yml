@@ -1,0 +1,40 @@
+# ═══════════════════════════════════════════════════════════
+#  رزرونو MVP — override سرور (فقط پنل کسب‌وکار)
+#
+#  استفاده (روی سرور، همه‌چیز در داکر):
+#    docker compose -f docker-compose.yml -f docker-compose.mvp.yml up -d --build
+#
+#  این override سه کار می‌کند:
+#    1. nginx فقط پنلِ کسب‌وکار را در ریشه سرو می‌کند (nginx.mvp.conf) و
+#       فقط همین پوشه را mount می‌کند — customer/company هم‌گوش نیستند.
+#    2. ALLOWED_ORIGINS در production اجباری می‌شود (بدون آن کانتینر بالا نمی‌آید)
+#       تا middleware چکِ CSRF/Origin هرگز بی‌صدا خاموش نشود.
+#    3. RUN_SEED را می‌توان با متغیر env از بیرون کنترل کرد.
+# ═══════════════════════════════════════════════════════════
+services:
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    profiles: []          # override پروفایلِ «http» — در MVP همیشه بالا
+    ports:
+      - "80:80"
+      # برای HTTPS بعد از تنظیم SSL: - "443:443"
+    volumes:
+      - ./deploy/nginx/nginx.mvp.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./apps/business:/usr/share/nginx/html/business:ro
+
+  api:
+    environment:
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:?ALLOWED_ORIGINS را در .env تنظیم کن (مثلاً https://business.rezervno.ir)}
+
+  # بکاپ و cron از compose پایه ارث می‌برند؛ برای MVP نگه داشته می‌شوند.
+  backup:
+    restart: unless-stopped
+  cron:
+    restart: unless-stopped
