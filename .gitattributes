@@ -1,0 +1,5 @@
+# اسکریپت‌های شل باید همیشه LF باشند — وگرنه داخل کانتینر لینوکس
+# مفسر /bin/sh\r پیدا نمی‌شود و کانتینر با exit 127 ری‌استارت می‌شود.
+*.sh text eol=lf
+*.dockerfile text eol=lf
+Dockerfile text eol=lf
