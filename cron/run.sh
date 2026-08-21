@@ -3,9 +3,10 @@
 # API_URL و MAINTENANCE_KEY از محیط می‌آیند
 JOB="$1"
 URL="${API_URL:-http://api:3000}/api/v1/maintenance/${JOB}"
-curl -sf -X POST "$URL" \
-  -H "x-maintenance-key: ${MAINTENANCE_KEY}" \
-  -H "Content-Type: application/json" \
-  --max-time 30 \
+# wget داخلی busybox (بدون curl — apk روی سرور در دسترس نیست)
+wget -qO /dev/null -T 30 \
+  --header "x-maintenance-key: ${MAINTENANCE_KEY}" \
+  --header "Content-Type: application/json" \
+  --post-data='{}' "$URL" \
   && echo "[$(date)] ✓ $JOB" \
   || echo "[$(date)] ✗ $JOB failed"

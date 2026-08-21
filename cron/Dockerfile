@@ -1,5 +1,6 @@
 FROM alpine:3.19
-RUN apk add --no-cache curl
+# ⚠️ عمداً بدون apk: سرور به dl-cdn.alpinelinux.org دسترسی TLS ندارد.
+# run.sh به‌جای curl از wget داخلیِ busybox استفاده می‌کند.
 COPY crontab /etc/crontabs/root
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
