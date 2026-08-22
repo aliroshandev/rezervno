@@ -20,7 +20,7 @@
     "test:load": "k6 run tests/load/reservation.js"
   },
   "dependencies": {
-    "@prisma/client": "^5.20.0",
+    "@prisma/client": "6.16.2",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
     "next": "^16.2.12",
@@ -36,7 +36,7 @@
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
     "eslint": "^9.0.0",
-    "prisma": "^5.20.0",
+    "prisma": "6.16.2",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0"
   },

@@ -13,9 +13,9 @@ RUN npx prisma generate
 RUN npm run build
 
 # ── مرحله ۲: ایمیج نهایی (سخت‌شده) ──
-# ── بیس دبیان (نه آلپاین): engine اسکیمای Prisma 5.20 برای musl به OpenSSL 1.1
-#    نیاز دارد که در آلپاین مدرن نیست → «Error in Schema engine». نسخه‌ی دبیانی
-#    engine با OpenSSL 3 (از پیش در slim نصب است) کار می‌کند — بدون apt install. ──
+# ── بیس دبیان (نه آلپاین) + Prisma 6: engineهای v6 برای دبیان با OpenSSL 3
+#    ساخته شده‌اند که در slim از پیش هست — بدون apt install. Prisma 5.20 نسخه‌ی
+#    «openssl-1.1.x» را دانلود می‌کرد که در Debian 12 اجرا نمی‌شد. ──
 FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
@@ -34,7 +34,7 @@ COPY --chown=nextjs:nodejs package.json package-lock.json* ./
 #    خروجی تولیدشده از builder به node_modules/.prisma کپی می‌شود. CLI از build
 #    می‌آید و وقتی needed باشد engine را خودش دانلود می‌کند. ──
 RUN npm ci --omit=dev --ignore-scripts && \
-    npm install prisma@5.20.0 --no-save --ignore-scripts && \
+    npm install prisma@6.16.2 --no-save --ignore-scripts && \
     # دانلودِ پیشینی engineها در زمان build (به‌عنوان root) تا entrypoint با
     # کاربر non-root مجبور به نوشتن در node_modules نشود.
     (npx prisma -v || true) && \
