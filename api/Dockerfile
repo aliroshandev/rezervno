@@ -1,5 +1,5 @@
 # ── مرحله ۱: build ──
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
 WORKDIR /app
 COPY package.json package-lock.json* ./
 # ── --ignore-scripts: postinstall پروژه (`prisma generate`) را در این مرحله که فقط
@@ -13,19 +13,15 @@ RUN npx prisma generate
 RUN npm run build
 
 # ── مرحله ۲: ایمیج نهایی (سخت‌شده) ──
-FROM node:20-alpine AS runner
+# ── بیس دبیان (نه آلپاین): engine اسکیمای Prisma 5.20 برای musl به OpenSSL 1.1
+#    نیاز دارد که در آلپاین مدرن نیست → «Error in Schema engine». نسخه‌ی دبیانی
+#    engine با OpenSSL 3 (از پیش در slim نصب است) کار می‌کند — بدون apt install. ──
+FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-# ── (بدون `apk upgrade` / dumb-init) ──
-# `apk` به CDNِ آلپاین (dl-cdn.alpinelinux.org) وابسته است که در شبکه‌ی سرور
-# در دسترس نیست (TLS error → exit 99) و build را می‌شکند. dumb-init هم ضروری
-# نیست: docker-entrypoint.sh با `exec npm run start` تمام می‌شود، پس node
-# خودش PID1 می‌شود و سیگنال‌ها را می‌گیرد. حذفِ apk وابستگی به این CDN را
-# کاملاً برمی‌دارد. addgroup/adduser از busyboxِ داخلیِ آلپاین است و به apk
-# نیاز ندارد.
 
 # امنیت: ساخت کاربر non-root اختصاصی (اجرا با root خطرناک است)
-RUN addgroup -g 1001 -S nodejs && adduser -u 1001 -S nextjs -G nodejs
+RUN groupadd -g 1001 nodejs && useradd -u 1001 -g nodejs -s /bin/sh nextjs
 
 # ── بهینه‌سازیِ اندازه: به‌جای کپیِ کلِ node_modules (شامل typescript/tsx/@types که
 #    فقط برای build لازم بودند)، فقط وابستگی‌های production + prisma CLI نصب می‌شود.
