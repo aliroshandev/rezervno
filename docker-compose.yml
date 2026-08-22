@@ -92,7 +92,8 @@ services:
       - "3000"
     # ── بررسی سلامت واقعی (DB + Redis) — ارکستریتور pod ناسالم را خارج می‌کند ──
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      # node به‌جای wget — ایمیج دبیانِ api ابزار wget ندارد
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
