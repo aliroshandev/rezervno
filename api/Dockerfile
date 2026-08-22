@@ -39,7 +39,13 @@ COPY --chown=nextjs:nodejs package.json package-lock.json* ./
 #    می‌آید و وقتی needed باشد engine را خودش دانلود می‌کند. ──
 RUN npm ci --omit=dev --ignore-scripts && \
     npm install prisma@5.20.0 --no-save --ignore-scripts && \
-    npm cache clean --force
+    # دانلودِ پیشینی engineها در زمان build (به‌عنوان root) تا entrypoint با
+    # کاربر non-root مجبور به نوشتن در node_modules نشود.
+    (npx prisma -v || true) && \
+    npm cache clean --force && \
+    # مالکیت کامل /app به کاربر اجرایی — وگرنه prisma در runtime با
+    # «Can't write to /app/node_modules/@prisma/engines» می‌شکند.
+    chown -R nextjs:nodejs /app
 
 # فایل‌های build و اسکیمای لازم برای اجرا
 COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
