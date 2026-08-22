@@ -45,7 +45,10 @@ export async function requestOtp(rawPhone: string): Promise<{ devCode?: string }
   // console.warn بود و چیزی جلوی OTP_DEV_MODE=true در production را نمی‌گرفت — یعنی
   // endpoint وریفای کدِ OTP را مستقیم در پاسخِ API برمی‌گرداند (auth bypass کامل).
   // حالا fail-fast: اگر این ترکیبِ خطرناک رخ دهد، پردازش OTP اصلاً متوقف می‌شود.
-  if (devMode && process.env.NODE_ENV === 'production') {
+  // استثنای صریح برای سرور دمو: چون `next start` همیشه NODE_ENV را production
+  // می‌گذارد، حالت dev فقط با پرچمِ آگاهانه‌ی زیر در production کار می‌کند.
+  const prodDemoOverride = process.env.OTP_DEV_ALLOW_PRODUCTION === 'true';
+  if (devMode && process.env.NODE_ENV === 'production' && !prodDemoOverride) {
     throw new Error('[SECURITY] OTP_DEV_MODE=true در production مجاز نیست. جلوگیری از bypass احراز هویت.');
   }
   if (devMode) {
