@@ -53,6 +53,11 @@ COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 # Prisma Client تولیدشده (در مرحله‌ی build ساخته شد) — تا دوباره generate لازم نشود
 COPY --from=builder --chown=nextjs:nodejs /app/node_modules/.prisma ./node_modules/.prisma
+# ── Engineهای Prisma (query + schema/migration) ──
+# در builder موقع `npx prisma generate` دانلود شده‌اند. بدون این کپی، entrypoint
+# در runtime سعی می‌کند engine را دانلود کند و روی سروری که به binaries.prisma.sh
+# دسترسی ندارد با «Error in Schema engine» کرش می‌کند.
+COPY --from=builder --chown=nextjs:nodejs /app/node_modules/@prisma/engines ./node_modules/@prisma/engines
 COPY --chown=nextjs:nodejs docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
