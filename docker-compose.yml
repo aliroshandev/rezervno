@@ -63,6 +63,8 @@ services:
       # ⚠️ هرگز روی سرور واقعی/عمومی NODE_ENV=development نگذار
       NODE_ENV: ${NODE_ENV:-production}
       OTP_DEV_MODE: ${OTP_DEV_MODE:-false}
+      # فقط برای سرور دمو: اجازه‌ی DEV_MODE در production (کد OTP در پاسخ API برمی‌گردد!)
+      OTP_DEV_ALLOW_PRODUCTION: ${OTP_DEV_ALLOW_PRODUCTION:-false}
       # شناسه‌ی tenant مدیر پلتفرم (از خروجی seed) — برای دسترسی پنل شرکت
       PLATFORM_ADMIN_TENANT_ID: ${PLATFORM_ADMIN_TENANT_ID:-}
       # پیامک کاوه‌نگار (اختیاری — بدون آن فقط لاگ می‌شود)
