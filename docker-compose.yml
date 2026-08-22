@@ -59,7 +59,9 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       JWT_SECRET: ${JWT_SECRET:?کلید JWT را در .env تنظیم کن}
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?کلید refresh را در .env تنظیم کن}
-      NODE_ENV: production
+      # برای سرور دمو می‌توانی در .env بگذاری NODE_ENV=development تا OTP_DEV_MODE کار کند
+      # ⚠️ هرگز روی سرور واقعی/عمومی NODE_ENV=development نگذار
+      NODE_ENV: ${NODE_ENV:-production}
       OTP_DEV_MODE: ${OTP_DEV_MODE:-false}
       # شناسه‌ی tenant مدیر پلتفرم (از خروجی seed) — برای دسترسی پنل شرکت
       PLATFORM_ADMIN_TENANT_ID: ${PLATFORM_ADMIN_TENANT_ID:-}
